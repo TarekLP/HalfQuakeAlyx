@@ -1,0 +1,17 @@
+// Compiled material for ground1_6
+"Material"
+{
+    #include "materials/standard_base.vmat" // Include common base properties
+    "Shader" "vr_standard.vfx" // Explicitly define the shader
+
+    "Parameters"
+    {
+        "g_tColor"
+        {
+            "Texture" "materials/ground1_6.png"
+        }
+        "g_flProxyToggle" "1.0"
+        "g_flDirectionalLightStrength" "1.0"
+    }
+
+}

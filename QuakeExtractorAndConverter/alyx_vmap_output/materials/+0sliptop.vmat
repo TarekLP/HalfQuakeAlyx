@@ -1,0 +1,16 @@
+// Compiled material for +0sliptop
+"Material"
+{
+    #include "materials/standard_base.vmat" // Include common base properties
+
+    "Parameters"
+    {
+        "g_tColor"
+        {
+            "Texture" "materials/+0sliptop.png"
+        }
+        "g_flProxyToggle" "1.0"
+        "g_flDirectionalLightStrength" "1.0"
+    }
+
+}

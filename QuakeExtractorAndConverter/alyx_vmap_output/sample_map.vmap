@@ -1,0 +1,31 @@
+<!-- DMX encoding keyvalues2_nosoftspace 1 format vmap 6 -->
+<map version="6">
+    <world name="world">
+        <solid name="brush_0">
+            <side>
+                <plane x1="-96.000000" y1="0.000000" z1="96.000000" x2="96.000000" y2="0.000000" z2="96.000000" x3="-96.000000" y3="0.000000" z3="-96.000000"/>
+                <material name="materials/wall_tex.vmat"/>
+            </side>
+            <side>
+                <plane x1="-96.000000" y1="96.000000" z1="96.000000" x2="-96.000000" y2="96.000000" z2="-96.000000" x3="96.000000" y3="96.000000" z3="96.000000"/>
+                <material name="materials/ceiling_tex.vmat"/>
+            </side>
+            <side>
+                <plane x1="-96.000000" y1="0.000000" z1="96.000000" x2="-96.000000" y2="96.000000" z2="96.000000" x3="-96.000000" y3="0.000000" z3="-96.000000"/>
+                <material name="materials/floor_tex.vmat"/>
+            </side>
+            <side>
+                <plane x1="96.000000" y1="0.000000" z1="96.000000" x2="96.000000" y2="0.000000" z2="-96.000000" x3="96.000000" y3="96.000000" z3="96.000000"/>
+                <material name="materials/brick_tex.vmat"/>
+            </side>
+            <side>
+                <plane x1="-96.000000" y1="0.000000" z1="-96.000000" x2="96.000000" y2="0.000000" z2="-96.000000" x3="-96.000000" y3="96.000000" z3="-96.000000"/>
+                <material name="materials/_clip.vmat"/>
+            </side>
+            <side>
+                <plane x1="-96.000000" y1="0.000000" z1="96.000000" x2="-96.000000" y2="0.000000" z2="-96.000000" x3="96.000000" y3="0.000000" z3="96.000000"/>
+                <material name="materials/water_tex.vmat"/>
+            </side>
+        </solid>
+    </world>
+</map>

@@ -1,0 +1,17 @@
+// Compiled material for crate0_side
+"Material"
+{
+    #include "materials/standard_base.vmat" // Include common base properties
+    "Shader" "vr_standard.vfx" // Explicitly define the shader
+
+    "Parameters"
+    {
+        "g_tColor"
+        {
+            "Texture" "materials/crate0_side.png"
+        }
+        "g_flProxyToggle" "1.0"
+        "g_flDirectionalLightStrength" "1.0"
+    }
+
+}
