@@ -6,12 +6,8 @@ import shutil
 import tkinter as tk
 from tkinter import scrolledtext, messagebox, filedialog
 import threading
-from PIL import Image, ImageDraw, ImageFont # Import ImageFont for dummy PNGs
-import sys # Import the sys module
-
-# No longer needed as WAD extraction is removed
-# QUAKE_PALETTE = [...]
-# FLATTENED_PALETTE = [...]
+from PIL import Image, ImageDraw, ImageFont
+import sys
 
 
 def prettify_xml(elem):
@@ -47,7 +43,7 @@ def parse_quake_map(map_filepath):
     unique_textures = set()
     current_brush_planes = []
     
-    # State flags
+    # State flags to correctly identify entity and brush blocks
     in_entity_block = False
     in_brush_block = False
 
@@ -56,57 +52,51 @@ def parse_quake_map(map_filepath):
         for line_num, line in enumerate(f, 1):
             stripped_line = line.strip()
 
-            # Skip comments and empty lines
+            # Skip comments and empty lines for cleaner parsing
             if not stripped_line or stripped_line.startswith('//'):
                 continue
 
             if stripped_line == '{':
                 if not in_entity_block:
-                    # This is the start of a new top-level entity block (e.g., worldspawn or func_xxx)
+                    # This marks the beginning of a top-level entity (e.g., worldspawn)
                     in_entity_block = True
-                    in_brush_block = False # Assume not in brush yet, waiting for first brush or properties
+                    in_brush_block = False # Not yet in a brush within this entity
                 else:
-                    # This is a nested '{', which indicates the start of a new brush block
+                    # This marks the beginning of a brush block within an entity
                     in_brush_block = True
-                    current_brush_planes = [] # Start collecting planes for this new brush
+                    current_brush_planes = [] # Initialize list for planes of this new brush
             elif stripped_line == '}':
                 if in_brush_block:
-                    # End of a brush block
+                    # End of a brush block, add collected planes to brushes list
                     if current_brush_planes:
                         brushes.append(current_brush_planes)
                     in_brush_block = False
                     current_brush_planes = [] # Reset for next brush
                 elif in_entity_block:
-                    # End of an entity block (after all its brushes and properties)
+                    # End of an entity block
                     in_entity_block = False
             else:
-                # If we are inside a brush block, try to parse a plane
+                # If inside a brush block, attempt to parse a plane definition
                 if in_brush_block:
-                    # Regex to capture the three points and the texture name.
-                    # It's lenient about data after the texture name as we don't need UVs/lightmap.
+                    # Regex to extract three 3D points and the texture name.
+                    # It's designed to be robust against varying whitespace and additional data after texture.
                     plane_match = re.match(r'\(\s*([\d\.\-]+)\s+([\d\.\-]+)\s+([\d\.\-]+)\s*\)\s*\(\s*([\d\.\-]+)\s+([\d\.\-]+)\s+([\d\.\-]+)\s*\)\s*\(\s*([\d\.\-]+)\s+([\d\.\-]+)\s+([\d\.\-]+)\s*\)\s*([^\s]+).*', stripped_line)
                     if plane_match:
+                        # Extract and convert points to floats
                         p1 = (float(plane_match.group(1)), float(plane_match.group(2)), float(plane_match.group(3)))
                         p2 = (float(plane_match.group(4)), float(plane_match.group(5)), float(plane_match.group(6)))
                         p3 = (float(plane_match.group(7)), float(plane_match.group(8)), float(plane_match.group(9)))
-                        texture_name = plane_match.group(10).lower() # Convert to lowercase for consistency
+                        texture_name = plane_match.group(10).lower() # Get texture name and convert to lowercase
 
                         current_brush_planes.append({
                             'plane': (p1, p2, p3),
                             'texture': texture_name
                         })
                         unique_textures.add(texture_name)
-                    # else:
-                        # If a line inside a brush block doesn't match a plane, it's unexpected
-                        # but we continue parsing other lines.
-                        # print(f"  [WARNING] Line {line_num}: Unexpected content in brush block: '{stripped_line}'")
-                # else:
-                    # If we are inside an entity block but not a brush block,
-                    # this line is likely an entity property ("key" "value").
-                    # We ignore these as per user request ("don't need to extract entities").
-                    # print(f"  [DEBUG] Line {line_num}: Ignoring entity property: '{stripped_line}'")
+                    # Lines not matching a plane within a brush block are ignored (e.g., UV/lightmap data)
+                # Lines inside an entity block but outside a brush block are entity properties, which are ignored.
     
-    # Handle case where the map file might end without proper closing braces for the last brush
+    # Add any remaining brush planes if the file ends abruptly
     if current_brush_planes:
         brushes.append(current_brush_planes)
 
@@ -116,8 +106,10 @@ def parse_quake_map(map_filepath):
 def copy_pre_extracted_texture(texture_name, output_dir, extracted_textures_dir):
     """
     Copies a pre-extracted PNG texture from a specified directory to the output materials directory.
+    Sanitizes the texture name to ensure compatibility with Source 2 file naming conventions.
     """
-    # Sanitize texture_name for filename use (replace non-alphanumeric/underscore with underscore)
+    # Sanitize texture_name: replace any non-alphanumeric/underscore characters with an underscore.
+    # Also remove leading '*' and convert to lowercase for consistency.
     sanitized_texture_name = re.sub(r'[^a-zA-Z0-9_]', '_', texture_name.lstrip('*').lower())
 
     source_filepath = os.path.join(extracted_textures_dir, f"{sanitized_texture_name}.png")
@@ -145,37 +137,41 @@ def copy_pre_extracted_texture(texture_name, output_dir, extracted_textures_dir)
 
 def create_vmat_file(texture_name, output_dir, png_copied=False):
     """
-    Creates a basic .vmat file for a given texture name.
+    Creates a basic .vmat file for a given texture name, compatible with Half-Life: Alyx.
+    Handles transparency flags based on Quake's '{' prefix convention.
     """
     # Sanitize texture_name for filename use (replace non-alphanumeric/underscore with underscore)
     sanitized_texture_name = re.sub(r'[^a-zA-Z0-9_]', '_', texture_name.lstrip('*').lower())
     
+    # Determine if the original Quake texture name indicates transparency (e.g., '{water')
+    is_transparent = texture_name.startswith('{')
+
+    # Build the VMAT content string
     vmat_content = f"""
 // Compiled material for {sanitized_texture_name}
 "Material"
 {{
-    "Shader" "vr_standard.vfx" // Explicitly define the shader
+    "Shader" "vr_standard.vfx" // Explicitly define the standard VR shader for Alyx
 
-    // Default to opaque, set to 1 if transparent
-    "F_TRANSLUCENT" "0" 
-    "F_ALPHA_TEST" "0"  
+    // Material flags for transparency and alpha testing
+    "F_TRANSLUCENT" "{1 if is_transparent else 0}" 
+    "F_ALPHA_TEST" "0"  // Quake's '{{' typically means blend, not alpha test. Set to 1 if hard cut-off is needed.
 
+    // Parameters block for shader inputs
     "Parameters"
     {{
         "g_tColor"
         {{
             "Texture" "materials/{sanitized_texture_name}.png"
         }}
-        "g_flDirectionalLightStrength" "1.0"
-        "g_flProxyToggle" "1.0"
+        "g_flDirectionalLightStrength" "1.0" // Common parameter for light influence
+        "g_flProxyToggle" "1.0"              // Common parameter, often related to rendering proxies
     }}
 """
-    # For transparent textures, you might need specific flags in VMAT
-    if texture_name.startswith('{'): # Check original texture name for transparency flag
+    # Add BlendMode if the material is transparent
+    if is_transparent:
         vmat_content += """
-    "Translucent" "1"
-    "BlendMode" "ALPHA_BLEND"
-    // "AlphaTest" "1" // Use AlphaTest instead of BlendMode if it's a hard cut-off
+    "BlendMode" "ALPHA_BLEND" // Use alpha blending for transparent materials
 """
     vmat_content += """
 }
@@ -190,33 +186,39 @@ def create_vmat_file(texture_name, output_dir, png_copied=False):
 def generate_vmap_content(map_data):
     """
     Generates the XML content for a Half-Life: Alyx .vmap file
-    from the parsed Quake map data.
+    from the parsed Quake map data using xml.etree.ElementTree.
     """
-    # Add the Source 2 DMX encoding header - MUST be the very first line
-    vmap_header = '<!-- DMX encoding keyvalues2_nosoftspace 1 format vmap 6 -->'
+    # Source 2 DMX encoding header - MUST be the very first line of the file.
+    # Updated to binary 9 format vmap 29 as requested.
+    vmap_header = '<!-- dmx encoding binary 9 format vmap 29 -->'
 
-    root = ET.Element("map", version="6") # Updated version to "6" for Alyx compatibility
+    # Create the root 'map' element with version 6 (standard for Alyx)
+    root = ET.Element("map", version="6")
 
+    # Create the 'world' entity node
     world_node = ET.SubElement(root, "world", name="world")
 
-    # Define a scaling factor for Quake units to Source 2 units
-    # Quake units are 16 units/foot, Source 2 units are 12 units/foot (1 unit/inch)
-    # So, 1 Quake unit = 16/12 = 4/3 Source 2 units. To convert from Quake to Source 2, multiply by 3/4 (0.75)
+    # Define a scaling factor for Quake units to Source 2 units.
+    # Quake units are 16 units/foot, Source 2 units are 12 units/foot (1 unit/inch).
+    # To convert from Quake to Source 2, multiply by 3/4 (0.75).
     SCALE_FACTOR = 0.75 
 
+    # Iterate through each brush parsed from the Quake map
     for brush_idx, brush_planes in enumerate(map_data):
+        # Create a 'solid' element for each brush
         solid_node = ET.SubElement(world_node, "solid", name=f"brush_{brush_idx}")
 
+        # Iterate through each plane (side) of the current brush
         for plane_data in brush_planes:
             side_node = ET.SubElement(solid_node, "side")
 
             # Quake uses Z-up, Source 2 typically Y-up.
-            # Conversion: (x, y, z) -> (x, z, -y)
+            # Conversion: (x_quake, y_quake, z_quake) -> (x_source2, z_source2, -y_source2)
             p1 = plane_data['plane'][0]
             p2 = plane_data['plane'][1]
             p3 = plane_data['plane'][2]
 
-            # Apply Z-up to Y-up conversion and scaling
+            # Apply Z-up to Y-up conversion and scaling to each point
             p1_s2 = (p1[0] * SCALE_FACTOR, p1[2] * SCALE_FACTOR, -p1[1] * SCALE_FACTOR)
             p2_s2 = (p2[0] * SCALE_FACTOR, p2[2] * SCALE_FACTOR, -p2[1] * SCALE_FACTOR)
             p3_s2 = (p3[0] * SCALE_FACTOR, p3[2] * SCALE_FACTOR, -p3[1] * SCALE_FACTOR)
@@ -229,18 +231,20 @@ def generate_vmap_content(map_data):
 
             # Reference the .vmat file using the sanitized texture name
             sanitized_texture_name = re.sub(r'[^a-zA-Z0-9_]', '_', plane_data['texture'].lstrip('*').lower())
+            # The material path is relative to the addon's content root (e.g., quakeautomatedscriptport)
             material_node = ET.SubElement(side_node, "material", name=f"materials/{sanitized_texture_name}.vmat")
 
-            # UV data is highly complex to convert directly from Quake's format.
-            # Hammer will likely generate default UVs, or you'll need to manually adjust.
-            # For now, rely on Hammer's default or manual adjustment.
+            # NOTE ON UVs:
+            # UV data is highly complex to convert directly from Quake's format to Source 2's.
+            # Hammer will typically generate default UVs upon import, or you'll need to manually adjust them.
+            # Automated UV conversion is beyond the scope of this simplified converter.
             # If you wanted to attempt UVs, it would look something like this within the <side> tag:
             # <uvs u="0 1 0 0" v="0 0 1 0"/>  (example, actual values depend on the texture projection)
 
-    # Prettify the XML tree
+    # Prettify the entire XML tree for readability
     pretty_xml_content = prettify_xml(root)
 
-    # Combine the DMX header with the prettified XML content
+    # Combine the DMX header with the prettified XML content, ensuring header is first
     final_vmap_content = f"{vmap_header}\n{pretty_xml_content}"
     return final_vmap_content
 
@@ -248,20 +252,27 @@ def convert_folder(input_folder, output_folder, extracted_textures_dir, console_
     """
     Converts all Quake .map files in the input_folder to Half-Life: Alyx .vmap files
     and generates corresponding .vmat files in the output_folder.
-    It now expects textures to be pre-extracted in the 'extracted_textures_dir'.
-    Output is redirected to the provided console_widget.
+    It expects textures to be pre-extracted as PNGs in 'extracted_textures_dir'.
+    Output messages are redirected to the provided console_widget.
     """
     def print_to_console(s):
+        """Helper function to print messages to the GUI console and auto-scroll."""
         console_widget.insert(tk.END, s + "\n")
         console_widget.see(tk.END) # Auto-scroll to the end
-        console_widget.update_idletasks() # Force update GUI
+        console_widget.update_idletasks() # Force GUI update
 
     if not os.path.exists(input_folder):
         print_to_console(f"Error: Input folder '{input_folder}' does not exist.")
         return
 
-    os.makedirs(output_folder, exist_ok=True)
-    materials_output_dir = os.path.join(output_folder, "materials")
+    # Define the actual output subdirectories, ensuring 'quakeautomatedscriptport' is always present
+    addon_content_dir = os.path.join(output_folder, "quakeautomatedscriptport")
+    maps_output_dir = os.path.join(addon_content_dir, "maps")
+    materials_output_dir = os.path.join(addon_content_dir, "materials")
+
+    # Create all necessary output directories
+    os.makedirs(addon_content_dir, exist_ok=True)
+    os.makedirs(maps_output_dir, exist_ok=True)
     os.makedirs(materials_output_dir, exist_ok=True)
 
     map_files_found = False
@@ -269,10 +280,9 @@ def convert_folder(input_folder, output_folder, extracted_textures_dir, console_
 
     print_to_console(f"\nScanning input folder: '{input_folder}' for .map files...")
     map_files_in_input_folder = []
+    # Walk through the input folder to find all .map files
     for root, dirs, files in os.walk(input_folder):
         print_to_console(f"  Checking directory: {root}")
-        print_to_console(f"  Found subdirectories: {dirs}")
-        print_to_console(f"  Found files: {files}")
         for file in files:
             if file.lower().endswith(".map"):
                 map_files_in_input_folder.append(os.path.join(root, file))
@@ -286,7 +296,8 @@ def convert_folder(input_folder, output_folder, extracted_textures_dir, console_
         print_to_console(f"- {map_filepath}")
         map_files_found = True
         map_name = os.path.splitext(os.path.basename(map_filepath))[0]
-        vmap_filepath = os.path.join(output_folder, f"{map_name}.vmap")
+        # Construct the .vmap file path within the 'maps' subdirectory
+        vmap_filepath = os.path.join(maps_output_dir, f"{map_name}.vmap")
 
         print_to_console(f"\nProcessing {map_filepath}...")
         brushes, unique_textures_in_map = parse_quake_map(map_filepath)
@@ -294,9 +305,13 @@ def convert_folder(input_folder, output_folder, extracted_textures_dir, console_
 
         if brushes:
             vmap_content = generate_vmap_content(brushes)
-            with open(vmap_filepath, 'w') as f:
-                f.write(vmap_content)
-            print_to_console(f"Generated .vmap file: {vmap_filepath}")
+            try:
+                # Write in binary mode as the header specifies binary encoding
+                with open(vmap_filepath, 'wb') as f:
+                    f.write(vmap_content.encode('utf-8')) # Encode to bytes before writing
+                print_to_console(f"Generated .vmap file: {vmap_filepath}")
+            except IOError as e:
+                print_to_console(f"[ERROR] Could not write .vmap file '{vmap_filepath}': {e}")
         else:
             print_to_console(f"No brushes found in {map_filepath}. Skipping .vmap generation.")
 
@@ -306,6 +321,7 @@ def convert_folder(input_folder, output_folder, extracted_textures_dir, console_
 
     print_to_console(f"\n--- Copying pre-extracted textures from '{extracted_textures_dir}' and generating .vmat files ---")
     for texture in all_unique_textures:
+        # Pass the materials_output_dir to create_vmat_file and copy_pre_extracted_texture
         png_copied = copy_pre_extracted_texture(texture, materials_output_dir, extracted_textures_dir)
         create_vmat_file(texture, materials_output_dir, png_copied)
 
@@ -322,25 +338,26 @@ class QuakeVmapConverterApp:
         self.master = master
         master.title("Quake .map to Alyx .vmap Converter")
 
-        # Define dark theme colors
+        # Define dark theme colors for a modern look
         self.bg_dark_gray = "#2B2B2B"
         self.fg_light_gray = "#E0E0E0"
         self.button_bg = "#4A4A4A"
         self.button_fg = "#FFFFFF"
         self.console_bg = "#1E1E1E"
-        self.console_text_color = "#BB86FC" # A shade of purple
+        self.console_text_color = "#BB86FC" # A shade of purple for console output
 
         master.config(bg=self.bg_dark_gray)
 
         # Use tk.StringVar for dynamic path updates in Entry widgets
-        # Set default input folder to a 'quake_maps_input' subdirectory in the script's directory
         script_dir = os.path.dirname(__file__)
         self.input_folder_var = tk.StringVar(value=os.path.normpath(os.path.join(script_dir, "quake_maps_input")))
-        self.output_folder_var = tk.StringVar(value="alyx_vmap_output")
-        self.pre_extracted_textures_folder_var = tk.StringVar(value="wad_extracted")
+        # Set the main output folder to a generic 'alyx_output' in the script's directory
+        # The 'quakeautomatedscriptport' folder will be created inside this.
+        self.output_folder_var = tk.StringVar(value=os.path.normpath(os.path.join(script_dir, "alyx_output")))
+        self.pre_extracted_textures_folder_var = tk.StringVar(value=os.path.normpath(os.path.join(script_dir, "wad_extracted")))
 
         self.create_widgets()
-        self.setup_dummy_files() # Setup dummy files on app start
+        self.setup_dummy_files() # Setup dummy files on app start for convenience
 
     def create_widgets(self):
         # Input Folder Selection
@@ -351,7 +368,7 @@ class QuakeVmapConverterApp:
         tk.Button(input_frame, text="Browse", command=lambda: self.browse_folder(self.input_folder_var), bg=self.button_bg, fg=self.button_fg, activebackground=self.fg_light_gray, activeforeground=self.button_bg).pack(side=tk.RIGHT)
 
         # Output Folder Selection
-        tk.Label(self.master, text="Alyx VMAP Output Folder:", bg=self.bg_dark_gray, fg=self.fg_light_gray).pack(pady=(10, 0))
+        tk.Label(self.master, text="Alyx Output Base Folder (e.g., alyx_output):", bg=self.bg_dark_gray, fg=self.fg_light_gray).pack(pady=(10, 0))
         output_frame = tk.Frame(self.master, bg=self.bg_dark_gray)
         output_frame.pack(fill=tk.X, padx=10)
         tk.Entry(output_frame, textvariable=self.output_folder_var, width=50, bg=self.button_bg, fg=self.button_fg, insertbackground=self.fg_light_gray).pack(side=tk.LEFT, fill=tk.X, expand=True)
@@ -393,13 +410,15 @@ class QuakeVmapConverterApp:
             path_var.set(os.path.normpath(folder_selected))
 
     def clear_console(self):
+        """Clears the text in the console output area."""
         self.console_text.config(state='normal')
         self.console_text.delete(1.0, tk.END)
         self.console_text.config(state='disabled')
 
     def start_conversion_thread(self):
+        """Starts the conversion process in a separate thread to keep the GUI responsive."""
         self.clear_console()
-        self.compile_button.config(state='disabled') # Disable button during conversion
+        self.compile_button.config(state='disabled') # Disable buttons during conversion
         self.clear_button.config(state='disabled')
 
         # Get current paths from entry widgets
@@ -410,33 +429,37 @@ class QuakeVmapConverterApp:
         # Run conversion in a separate thread
         self.conversion_thread = threading.Thread(target=self.run_conversion, args=(input_folder, output_folder, pre_extracted_textures_folder))
         self.conversion_thread.start()
-        self.master.after(100, self.check_conversion_thread) # Start checking thread status
+        # Start checking thread status periodically to re-enable buttons
+        self.master.after(100, self.check_conversion_thread) 
 
     def run_conversion(self, input_folder, output_folder, pre_extracted_textures_folder):
+        """Executes the map conversion logic."""
         try:
             convert_folder(input_folder, output_folder, pre_extracted_textures_folder, self.console_text)
             messagebox.showinfo("Conversion Complete", "Map conversion process finished successfully!")
         except Exception as e:
-            messagebox.showerror("Conversion Error", f"An error occurred during conversion: {e}")
+            messagebox.showerror("Conversion Error", f"An unexpected error occurred during conversion: {e}")
             print(f"[ERROR] Critical error during conversion: {e}")
         finally:
             # Re-enable buttons in the main thread after conversion finishes
             self.master.after(0, self.enable_buttons)
 
     def check_conversion_thread(self):
+        """Checks if the conversion thread is still alive and re-enables buttons when it finishes."""
         if self.conversion_thread.is_alive():
             self.master.after(100, self.check_conversion_thread) # Keep checking
         else:
             self.enable_buttons()
 
     def enable_buttons(self):
+        """Re-enables the GUI buttons."""
         self.compile_button.config(state='normal')
         self.clear_button.config(state='normal')
 
     def setup_dummy_files(self):
         """
-        Ensures input folder and dummy textures exist for testing.
-        Only creates files if the directories are empty.
+        Ensures input folder and dummy textures exist for testing/initial setup.
+        Only creates files if the respective directories are empty.
         """
         # Ensure base directories exist
         os.makedirs(self.input_folder_var.get(), exist_ok=True)
@@ -476,6 +499,7 @@ class QuakeVmapConverterApp:
         # extracted Quake textures (e.g., from a tool like Wally or TexMex) here.
         
         def create_dummy_png(filename, size=(64, 64), color=(128, 128, 128), text=None, transparent=False):
+            """Helper to create a simple dummy PNG image."""
             if transparent:
                 img = Image.new('RGBA', size, color + (0,)) # Add alpha channel for transparency
             else:
@@ -520,17 +544,20 @@ class TextRedirector:
         self.widget = widget
 
     def write(self, s):
-        # Schedule the update on the main Tkinter thread
+        # Schedule the update on the main Tkinter thread to prevent threading issues with Tkinter
         self.widget.after(0, self._write_to_widget, s)
 
     def _write_to_widget(self, s):
+        """Internal method to safely write text to the Tkinter Text widget."""
         self.widget.config(state='normal') # Enable editing
         self.widget.insert(tk.END, s, "console_output") # Apply tag for color
         self.widget.see(tk.END) # Auto-scroll to the end
         self.widget.config(state='disabled') # Disable editing
+        self.widget.update_idletasks() # Force GUI update immediately
 
     def flush(self):
-        pass # Required for file-like object
+        """Required for file-like object compatibility."""
+        pass 
 
 
 if __name__ == "__main__":
